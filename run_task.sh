@@ -46,8 +46,8 @@ export PYTHONPATH="/home/hqlab/workspace/base_model/dinov2:${PYTHONPATH}"
 python src/semantic_estimator.py \
     --base_dir ${BASE_DIR} \
     --input_subdir "${OUTPUT_SUBDIR}/images" \
-    --output_subdir "${OUTPUT_SUBDIR}/masks" 
-    # --save_vis
+    --output_subdir "${OUTPUT_SUBDIR}/masks_with_vis" \
+    --save_vis
 
 
 echo "Running PlaneDetector..."
@@ -55,7 +55,7 @@ source activate etc
 python src/plane_detector.py \
     --base_dir ${BASE_DIR} \
     --input_subdir ${OUTPUT_SUBDIR} \
-    --output_subdir "${OUTPUT_SUBDIR}/planes" \
+    --output_subdir "${OUTPUT_SUBDIR}/planes_with_ceiling" \
     --save_vis
 
 echo "Running WaymoConvertor..."

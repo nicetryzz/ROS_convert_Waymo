@@ -161,6 +161,37 @@ class SemanticSegmentation:
         
         return segmentation_refined
 
+    def _expand_light_mask(self, segmentation: np.ndarray, light_index: int, 
+                          kernel_size: int = 5, iterations: int = 1) -> np.ndarray:
+        """扩大光源的mask区域
+        
+        Args:
+            segmentation: 分割结果
+            light_index: 光源的类别索引
+            kernel_size: 膨胀操作的核大小
+            iterations: 膨胀操作的迭代次数
+            
+        Returns:
+            处理后的分割结果
+        """
+        # 创建light的mask
+        light_mask = (segmentation == light_index)
+        
+        # 创建圆形kernel来使扩张更自然
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        
+        # 使用形态学操作扩大mask
+        dilated_mask = cv2.dilate(light_mask.astype(np.uint8), kernel, iterations=iterations)
+        
+        # 使用高斯模糊使边缘更平滑
+        dilated_mask = cv2.GaussianBlur(dilated_mask, (3, 3), 0)
+        
+        # 创建结果图像
+        result = segmentation.copy()
+        result[dilated_mask > 0.5] = light_index
+        
+        return result
+
     def process_single_image(self, image_path: Path, output_path: Path, ego_mask: np.ndarray) -> None:
         """处理单张图像
         
@@ -187,6 +218,8 @@ class SemanticSegmentation:
         
         # 优化ego car区域
         segmentation_logits = self._refine_ego_car_mask(segmentation_logits, ego_mask)
+        
+        segmentation_logits = self._expand_light_mask(segmentation_logits,light_index=82,kernel_size=5,iterations=1)
         
         # 创建输出目录
         output_path.parent.mkdir(parents=True, exist_ok=True)

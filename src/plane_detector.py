@@ -24,10 +24,10 @@ class PlaneDetector:
             42,  # COLUMN
             14,  # DOOR
             43,  # SIGNBOARD
+            5,   # CEILING
         ],
         # 不需要处理的对象
         'ignore': [
-            5,   # CEILING
             20,  # CAR
             150, # EGO_CAR
             82,  # LIGHT

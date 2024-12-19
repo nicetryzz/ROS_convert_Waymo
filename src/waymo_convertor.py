@@ -85,28 +85,68 @@ class WaymoConverter:
         # 解析内参矩阵
         intrinsic = np.array(params["intrinsic"]).reshape(3, 3)
         
-        return extrinsic, intrinsic
+        # 解析畸变系数
+        distortion = np.array(params["distortion"])
+        
+        return extrinsic, intrinsic, distortion
 
     def process_camera(self, camera_name):
         """处理单个相机数据"""
         img = imageio.imread(self.data_dir / "images" / f"{camera_name}" / "000000.png")
         
-        extrinsic, intrinsic = self.load_camera_params(camera_name)
+        extrinsic, intrinsic, distortion = self.load_camera_params(camera_name)
 
         # 计算相机到世界的变换
-        c2w = self.lidar_pose_pandar @ self.pandar_to_waymo @ inv(extrinsic)
+        c2w = self.lidar_pose @ self.pandar_to_waymo @ extrinsic
+        
+        # 加载相机时间戳并转换为NumPy数组
+        with open(self.data_dir / "time" / f"{camera_name}.json", 'r') as f:
+            timestamp = json.load(f)
+        timestamp = np.array([float(t)/1e9 for t in timestamp], dtype=np.float64)  # 转换为NumPy数组
+        
         return {
             "hw": np.tile(np.array([img.shape[0],img.shape[1]]), (self.frame_num, 1)),
+            "c2v": np.tile(self.pandar_to_waymo @ extrinsic, (self.frame_num, 1, 1)).astype(np.float32),
+            "sensor_v2w": self.lidar_pose,
             "c2w": c2w.astype(np.float32),
             "global_frame_ind": np.arange(self.frame_num),
             "intr": np.repeat(intrinsic[:3,:3].reshape(1,3,3), self.frame_num,  axis=0),
+            "distortion": np.repeat(distortion.reshape(1,5), self.frame_num,  axis=0),
+            "timestamp": timestamp  # NumPy数组格式的时间戳
+        }
+
+    def process_lidar(self):
+        """处理激光雷达数据"""
+        # 加载激光雷达时间戳并转换为NumPy数组
+        with open(self.data_dir / "time" / "pointcloud.json", 'r') as f:
+            timestamp = json.load(f)
+        timestamp = np.array([float(t)/1e9 for t in timestamp], dtype=np.float64)  # 转换为NumPy数组
+        
+        return {
+            "l2v": np.tile(np.eye(4), (self.frame_num, 1, 1)).astype(np.float32),
+            "l2w": self.lidar_pose,  # [N, 4, 4] 激光雷达位姿
+            "global_frame_ind": np.arange(self.frame_num),
+            "timestamp": timestamp  # NumPy数组格式的时间戳
+        }
+
+    def process_egocar(self):
+        """处理自车数据"""   
+        # 加载激光雷达时间戳作为自车时间戳,并转换为NumPy数组
+        with open(self.data_dir / "time" / "pointcloud.json", 'r') as f:
+            timestamp = json.load(f)
+        timestamp = np.array([float(t)/1e9 for t in timestamp], dtype=np.float64)  # 转换为NumPy数组
+        
+        return {
+            "v2w": self.lidar_pose,  # [N, 4, 4] 自车位姿
+            "global_frame_ind": np.arange(self.frame_num),
+            "timestamp": timestamp  # NumPy数组格式的时间戳
         }
 
     def convert(self):
         """转换数据到Waymo格式"""
         # 加载位姿和标定数据
-        self.lidar_pose_pandar = self.load_poses(self.data_dir / "lidar_poses.txt")
-        self.frame_num = self.lidar_pose_pandar.shape[0]
+        self.lidar_pose = self.load_poses(self.data_dir / "lidar_poses.txt")
+        self.frame_num = self.lidar_pose.shape[0]
         
         # 构建数据字典
         data = {
@@ -118,13 +158,27 @@ class WaymoConverter:
             "objects": {}
         }
         
+        # 添加自车
+        data["observers"]["ego_car"] = {
+            "class_name": "EgoVehicle",
+            "n_frames": self.frame_num,
+            "data": self.process_egocar(),
+        }
+        
         # 处理每个相机
         for cam_i, camera_name in enumerate(self.cameras):
             data["observers"][camera_name] = {
                 "class_name": "Camera",
-                "n_frames" : self.frame_num,
+                "n_frames": self.frame_num,
                 "data": self.process_camera(camera_name),
             }
+        
+        # 添加激光雷达
+        data["observers"]["lidar_TOP"] = {
+            "class_name": "RaysLidar",
+            "n_frames": self.frame_num,
+            "data": self.process_lidar(),
+        }
         
         # 保存为.pt文件
         output_path = self.data_dir / "scenario.pt"

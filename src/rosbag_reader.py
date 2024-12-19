@@ -13,6 +13,7 @@ from collections import defaultdict
 import bisect
 from typing import Dict, List, Tuple, Optional
 import argparse
+import json
 
 class RosbagReader:
     """用于读取和处理ROS包数据的类"""
@@ -42,6 +43,8 @@ class RosbagReader:
         # 创建输出目录结构
         self.images_dir = self.output_dir / 'images'
         self.pointcloud_dir = self.output_dir / 'lidar'
+        self.time_stamp_dir = self.output_dir / 'time'
+        self.timestamp_dict = defaultdict(list)
         self._create_directories()
 
     def _create_directories(self) -> None:
@@ -105,6 +108,7 @@ class RosbagReader:
         for topic in camera_data:
             camera_data[topic].sort(key=lambda x: x[0])
         pointcloud_data.sort(key=lambda x: x[0])
+        self.timestamp_dict['pointcloud'] = pointcloud_timestamps
         
         return camera_data, pointcloud_timestamps, pointcloud_data
 
@@ -131,7 +135,7 @@ class RosbagReader:
     def process(self) -> None:
         """处理rosbag文件并提取数据"""
         # 收集时间戳
-        camera_data, _, pointcloud_data = self._collect_timestamps()
+        camera_data, pc_timestamps, pointcloud_data = self._collect_timestamps()
         
         # 统计时间差
         total_time_diff = defaultdict(float)
@@ -184,6 +188,9 @@ class RosbagReader:
         
         # 打印统计信息
         self._print_statistics(total_time_diff, frame_count)
+        
+        # 保存时间戳
+        self._save_timestamps()
 
     def _process_images(self, frame_number: str, pc_timestamp: int, 
                        camera_data: Dict, total_time_diff: Dict) -> None:
@@ -207,6 +214,9 @@ class RosbagReader:
             time_diff = abs(pc_timestamp - closest_ts) / 1e9
             total_time_diff[camera_dir] += time_diff
             print(f"保存图像: {img_filename} (时间差: {time_diff:.3f}秒)")
+            
+            # 记录图像时间戳
+            self.timestamp_dict[camera_dir].append(closest_ts)
 
     def _print_statistics(self, total_time_diff: Dict, frame_count: int) -> None:
         """打印统计信息"""
@@ -214,6 +224,21 @@ class RosbagReader:
         for camera_dir in self.CAMERA_MAPPING.values():
             avg_time_diff = total_time_diff[camera_dir] / frame_count
             print(f"{camera_dir}: {avg_time_diff:.3f}秒")
+
+    def _save_timestamps(self) -> None:
+        """将时间戳保存到JSON文件"""
+        self.time_stamp_dir.mkdir(parents=True, exist_ok=True)
+        
+        for key, timestamps in self.timestamp_dict.items():
+            timestamp_file = self.time_stamp_dir / f"{key}.json"
+            
+            # 将时间戳转换为字符串格式
+            timestamps_str = [str(ts) for ts in timestamps]
+            
+            with open(timestamp_file, 'w') as f:
+                json.dump(timestamps_str, f, indent=2)
+            
+            print(f"{key}的时间戳已保存到: {timestamp_file}")
 
 def main():
     """主函数"""
