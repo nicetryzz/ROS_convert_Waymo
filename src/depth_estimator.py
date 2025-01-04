@@ -102,7 +102,7 @@ class DepthEstimator:
         
         # 保存深度图
         depth_output_path = output_path.with_suffix('.npz')
-        np.savez_compressed(depth_output_path, depth=processed_depth.astype(np.float32))
+        np.savez_compressed(depth_output_path, processed_depth.astype(np.float32))
         
         # 保存可视化结果
         if not self.pred_only:

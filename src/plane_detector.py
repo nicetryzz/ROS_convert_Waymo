@@ -34,8 +34,7 @@ class PlaneDetector:
         ]
     }
     
-    def __init__(self, base_dir: str, input_subdir: str, output_subdir: str, 
-                 save_visualization: bool = True):
+    def __init__(self, args):
         """初始化平面检测器
         
         Args:
@@ -44,45 +43,44 @@ class PlaneDetector:
             output_subdir: 输出子目录
             save_visualization: 是否保存可视化结果
         """
-        self.base_dir = Path(base_dir)
-        self.save_visualization = save_visualization
+        self.base_dir = Path(args.base_dir)
+        self.use_semantic = args.use_semantic
+        self.min_region_size = args.min_region_size
+        self.coarse_curvature_threshold = args.coarse_curvature_threshold
+        self.fine_curvature_threshold = args.fine_curvature_threshold
+        self.angle_threshold = args.angle_threshold
         
         # 设置输入输出路径
-        self.image_dir = self.base_dir / input_subdir / "images"
-        self.depth_dir = self.base_dir / input_subdir / "depths"
-        self.normal_dir = self.base_dir / input_subdir / "normals"
-        self.mask_dir = self.base_dir / input_subdir / "masks"
-        self.output_dir = self.base_dir / output_subdir
+        self.depth_dir = self.base_dir / args.input_subdir / "depths"
+        self.normal_dir = self.base_dir / args.input_subdir / "normals" 
+        self.mask_dir = self.base_dir / args.input_subdir / "masks"
+        self.output_dir = self.base_dir / args.output_subdir
         
         # 创建输出目录
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def process_single_image(self, image_path: Path) -> None:
+    def process_single_image(self, normal_path: Path) -> None:
         """处理单张图像
         
         Args:
-            image_path: 输入图像路径
+            normal_path: 输入法向量图路径
         """
-        print(f'Processing: {image_path}')
+        print(f'Processing: {normal_path}')
         
-        # 获取对应的深度图、法向量图和语义分割结果路径
-        camera_dir = image_path.parent.name
-        frame_name = image_path.stem
+        # 获取对应的深度图和语义分割结果路径
+        camera_dir = normal_path.parent.name
+        frame_name = normal_path.stem
         
         depth_path = self.depth_dir / camera_dir / f"{frame_name}.npz"
-        normal_path = self.normal_dir / camera_dir / f"{frame_name}.png"
         mask_path = self.mask_dir / camera_dir / f"{frame_name}.npz"
         
         # 读取所有数据
-        image = cv2.imread(str(image_path))
         depth_data = np.load(str(depth_path))
-        depth = depth_data['depth']
+        depth = depth_data['arr_0']
         depth_data.close()
         
         normal = cv2.imread(str(normal_path))
         normal = (normal.astype(np.float32) / 127.5) - 1.0
-        
-        # normal = self._depth_to_normals(depth)
         
         mask_data = np.load(str(mask_path))
         segmentation = mask_data['arr_0']
@@ -93,16 +91,15 @@ class PlaneDetector:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 进行平面检测
-        planes = self._detect_planes(image, depth, normal, segmentation)
+        planes = self._detect_planes(depth, normal, segmentation)
         
         # 保存结果
-        np.savez_compressed(str(output_path), planes=planes)
+        # np.savez_compressed(str(output_path), planes=planes)
         
-        # 可选：保存可视化结果
-        if self.save_visualization:
-            vis_path = output_path.with_suffix('.png')
-            vis_image = self._visualize_planes(planes)
-            cv2.imwrite(str(vis_path), vis_image)
+        vis_path = output_path.with_suffix('.png')
+        vis_image = self._visualize_planes(planes)
+        cv2.imwrite(str(vis_path), vis_image)
+        print(f"保存可视化结果: {vis_path}")
     
     def process_dataset(self, use_multiprocess=True) -> None:
         """处理整个数据集
@@ -112,15 +109,15 @@ class PlaneDetector:
         """
         print("开始处理数据集...")
         
-        # 收集所有需要处理的图像路径
-        all_images = []
+        # 收集所有需要处理的法向量图路径
+        all_normals = []
         for camera_dir in ["camera_FRONT", "camera_FRONT_RIGHT", "camera_BACK_RIGHT",
                           "camera_BACK", "camera_BACK_LEFT", "camera_FRONT_LEFT"]:
-            image_path = self.image_dir / camera_dir
-            if not image_path.exists():
-                print(f"警告: 目录不存在 {image_path}")
+            normal_path = self.normal_dir / camera_dir
+            if not normal_path.exists():
+                print(f"警告: 目录不存在 {normal_path}")
                 continue
-            all_images.extend(sorted(image_path.glob('*.png')))
+            all_normals.extend(sorted(normal_path.glob('*.png')))
         
         if use_multiprocess:
             # 多进程处理
@@ -128,12 +125,12 @@ class PlaneDetector:
             print(f"使用 {num_processes} 个进程进行处理")
             
             with Pool(processes=num_processes) as pool:
-                pool.map(self.process_single_image, all_images)
+                pool.map(self.process_single_image, all_normals)
         else:
             # 单进程处理
             print("使用单进程处理")
-            for image_path in all_images:
-                self.process_single_image(image_path)
+            for normal_path in all_normals:
+                self.process_single_image(normal_path)
     
     def _filter_invalid_regions(self, segmentation: np.ndarray, depth: np.ndarray) -> np.ndarray:
         """过滤无效区域，包括语义和深度
@@ -153,24 +150,6 @@ class PlaneDetector:
             valid_mask |= (segmentation == label)
         
         return valid_mask
-    
-    def _depth_to_normals(self, depth, fx=1211.792358, fy=1202.317627, cx=1017.378282, cy=787.396111):
-        h, w = depth.shape
-        
-        u_map = np.ones((h, 1)) * np.arange(1, w + 1) - cx  # u-u0
-        v_map = np.arange(1, h + 1).reshape(h, 1) * np.ones((1, w)) - cy  # v-v0
-        
-        Gu, Gv = get_DAG_filter(depth)
-        est_nx = Gu * fx
-        est_ny = Gv * fy
-        est_nz = -(depth + v_map * Gv + u_map * Gu)
-        est_normal = cv2.merge((est_nx, est_ny, est_nz))
-        
-        est_normal = vector_normalization(est_normal)
-        
-        est_normal = MRF_optim(depth, est_normal)
-        
-        return est_normal
     
     def _compute_depth_second_derivative(self, depth: np.ndarray) -> np.ndarray:
         """计算深度图的二阶导数
@@ -235,6 +214,8 @@ class PlaneDetector:
         # 第一阶段：仅使用法向量的区域生长
         initial_segments = np.zeros((h, w), dtype=int)
         current_label = 0
+        if not self.use_semantic:
+            coarse_curvature_threshold = fine_curvature_threshold
         
         points = [(y, x) for y in range(h) for x in range(w) if not visited[y, x]]
         for y, x in points:
@@ -257,8 +238,8 @@ class PlaneDetector:
                 current_label += 1
                 for ry, rx in region:
                     initial_segments[ry, rx] = current_label
-        
-        # return initial_segments
+        if not self.use_semantic:
+            return initial_segments
          
         # 第二阶段：根据语义重新分配
         final_segments = np.zeros_like(initial_segments)
@@ -318,12 +299,11 @@ class PlaneDetector:
         
         return final_segments
     
-    def _detect_planes(self, image: np.ndarray, depth: np.ndarray, 
-                      normal: np.ndarray, segmentation: np.ndarray,) -> tuple:
+    def _detect_planes(self, depth: np.ndarray, normal: np.ndarray, 
+                      segmentation: np.ndarray) -> tuple:
         """检测平面
         
         Args:
-            image: RGB图像 [H, W, 3]
             depth: 深度图 [H, W]
             normal: 法向量图 [H, W, 3]
             segmentation: 语义分割结果 [H, W]
@@ -332,11 +312,18 @@ class PlaneDetector:
             (refined_segments, plane_info): 优化后的分割结果和平面信息
         """
         # 1. 过滤无效区域
-        valid_mask = self._filter_invalid_regions(segmentation, depth)
+        if self.use_semantic:
+            valid_mask = self._filter_invalid_regions(segmentation, depth)
+        else:
+            valid_mask = np.ones_like(depth, dtype=bool)
 
         
         # 2. 使用区域生长进行分割
-        segments = self._segment_by_two_stage(normal, depth, segmentation, valid_mask)
+        segments = self._segment_by_two_stage(normal, depth, segmentation, valid_mask,
+                                              angle_threshold=self.angle_threshold,
+                                              coarse_curvature_threshold=self.coarse_curvature_threshold,
+                                              fine_curvature_threshold=self.fine_curvature_threshold,
+                                              min_region_size=self.min_region_size)
         
         # 3. 使用深度信息优化分割结果
         # refined_segments = self._refine_by_depth(segments, depth)
@@ -365,24 +352,30 @@ class PlaneDetector:
 def main():
     parser = argparse.ArgumentParser(description='Detect planes from images')
     parser.add_argument('--base_dir', type=str, 
-                        default="/home/hqlab/workspace/dataset/parkinglot",
+                        default="/home/hqlab/workspace/dataset/carla_data/dumper/",
                         help='Base directory')
     parser.add_argument('--input_subdir', type=str, 
-                        default="data/10_26",
+                        default="2024_12_29_13_59_40",
                         help='Input subdirectory')
     parser.add_argument('--output_subdir', type=str, 
-                        default="data/10_26/planes",
+                        default="2024_12_29_13_59_40/planes",
                         help='Output subdirectory')
-    parser.add_argument('--save_vis', action='store_true',
-                        help='Save visualization results')
-    
+    parser.add_argument('--use_semantic', action='store_true',
+                        help='Use semantic segmentation')
+    parser.add_argument('--use_multiprocess', action='store_true',
+                        help='Use multiprocessing')
+    parser.add_argument('--min_region_size', type=int, default=7500,
+                        help='Minimum region size for plane detection')
+    parser.add_argument('--coarse_curvature_threshold', type=float, default=0,
+                        help='Coarse curvature threshold for plane detection')
+    parser.add_argument('--fine_curvature_threshold', type=float, default=0.1,
+                        help='Fine curvature threshold for plane detection')
+    parser.add_argument('--angle_threshold', type=float, default=5,
+                        help='Angle threshold for plane detection')
     args = parser.parse_args()
     
-    detector = PlaneDetector(args.base_dir, args.input_subdir, args.output_subdir, 
-                           save_visualization=args.save_vis)
-    detector.process_dataset(use_multiprocess=True)
-    # detector = PlaneDetector(args.base_dir, args.input_subdir, args.output_subdir, 
-    #                         save_visualization=True)
-    # detector.process_single_image(Path("/home/hqlab/workspace/dataset/parkinglot/data/10_26/images/camera_BACK_LEFT/000276.png"))
+    detector = PlaneDetector(args)
+    detector.process_dataset(use_multiprocess=args.use_multiprocess)
+
 if __name__ == "__main__":
     main()

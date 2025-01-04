@@ -97,12 +97,12 @@ class RosbagReader:
             for topic, msg, t in bag.read_messages(
                 topics=list(self.CAMERA_MAPPING.keys()) + ['/pandar_points']
             ):
-                timestamp = t.to_nsec()
+                header_timestamp = msg.header.stamp.to_nsec()
                 if topic in self.CAMERA_MAPPING:
-                    camera_data[topic].append((timestamp, msg))
+                    camera_data[topic].append((header_timestamp, msg))
                 elif topic == '/pandar_points':
-                    pointcloud_timestamps.append(timestamp)
-                    pointcloud_data.append((timestamp, msg))
+                    pointcloud_timestamps.append(header_timestamp)
+                    pointcloud_data.append((header_timestamp, msg))
         
         # 对数据进行排序
         for topic in camera_data:
