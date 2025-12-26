@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 import argparse
 import open3d as o3d
+import os
 
 class LidarTransform:
     """雷达坐标转换类"""
@@ -53,6 +54,42 @@ class LidarTransform:
         
         return pose[:, :3]
     
+    def ply2npz(self, ply_dir: Path, npz_dir: Path):
+        """将PLY点云转换为局部坐标系的NPZ光线格式
+        
+        Args:
+            ply_dir: 点云文件目录
+            npz_dir: 输出NPZ目录
+        """
+        npz_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 处理每个点云文件
+        ply_files = sorted(ply_dir.glob('*.ply'))
+        for ply_file in ply_files:
+            # 读取点云
+            ply = o3d.io.read_point_cloud(str(ply_file))
+            points = np.asarray(ply.points)
+            
+            # 计算距离（深度）
+            ranges = np.linalg.norm(points, axis=1)
+    
+            # 计算局部坐标系下的光线方向（归一化）
+            non_zero_ranges = ranges > 1e-6 
+            rays_d_local = np.zeros_like(points)
+            rays_d_local[non_zero_ranges] = points[non_zero_ranges] / ranges[non_zero_ranges, np.newaxis]
+            
+            # 光线起点在局部坐标系原点
+            rays_o_local = np.zeros((points.shape[0], 3), dtype=np.float32)
+
+            ray_output_path = os.path.join(npz_dir, f'{ply_file.stem}.npz')
+            print(ray_output_path)
+            np.savez_compressed(
+                ray_output_path,
+                rays_o=rays_o_local,
+                rays_d=rays_d_local.astype(np.float32),
+                ranges=ranges.astype(np.float32)
+            )
+            
     def process_point_clouds(self, ply_dir: Path, pose_file: Path, output_dir: Path):
         """处理点云文件
         
@@ -94,14 +131,17 @@ def main():
                         default="/home/hqlab/workspace/dataset/parkinglot",
                         help='Base directory')
     parser.add_argument('--ply_dir', type=str, 
-                        default="data/10_26/lidar",
+                        default="data/bright_expose/lidar",
                         help='Point cloud directory relative to base_dir')
     parser.add_argument('--pose_file', type=str, 
-                        default="data/10_26/lidar_poses.txt",
+                        default="data/bright_expose/poses_adjusted.txt",
                         help='Pose file path relative to base_dir')
     parser.add_argument('--output_dir', type=str, 
-                        default="data/10_26/lidar_world",
+                        default="data/bright_expose/lidar_world",
                         help='Output directory relative to base_dir')
+    parser.add_argument('--npz_dir', type=str, 
+                        default="data/bright_expose/lidar_npz",
+                        help='Point cloud directory relative to base_dir')
     
     args = parser.parse_args()
     
@@ -109,8 +149,10 @@ def main():
     ply_dir = Path(args.base_dir) / args.ply_dir
     pose_file = Path(args.base_dir) / args.pose_file
     output_dir = Path(args.base_dir) / args.output_dir
+    npz_dir = Path(args.base_dir) / args.npz_dir
     
     transformer.process_point_clouds(ply_dir, pose_file, output_dir)
+    transformer.ply2npz(ply_dir, npz_dir)  # 不再需要pose_file参数
 
 if __name__ == "__main__":
     main()

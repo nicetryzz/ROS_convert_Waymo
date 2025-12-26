@@ -1,0 +1,84 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Sequence Depth Estimator",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/image_sequence_depth_estimator.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--base_input_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/images",
+                "--base_output_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/video_depth",
+                "--encoder", "vitl",
+                "--input_size", "518",
+                "--max_res", "2048",
+                "--target_fps", "24",
+                "--max_frames_per_camera", "10",
+                "--save_npz",
+                "--model_checkpoint", "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything/checkpoints/video_depth_anything_vitl.pth"
+            ],
+            "env": {
+                "PYTHONPATH": "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything:${env:PYTHONPATH}"
+            },
+            "python": "/home/hqlab/anaconda3/envs/depthanything-vedio/bin/python"
+        },
+        {
+            "name": "Debug Sequence Depth Estimator (Single Camera)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/image_sequence_depth_estimator.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--base_input_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/images",
+                "--base_output_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/video_depth_debug",
+                "--encoder", "vitl",
+                "--input_size", "518",
+                "--max_res", "1280",
+                "--target_fps", "24",
+                "--max_frames_per_camera", "5",
+                "--save_npz",
+                "--undistort_depth",
+                "--save_input_frames_video",
+                "--model_checkpoint", "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything/checkpoints/video_depth_anything_vitl.pth"
+            ],
+            "env": {
+                "PYTHONPATH": "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything:${env:PYTHONPATH}"
+            },
+            "python": "/home/hqlab/anaconda3/envs/depthanything-vedio/bin/python"
+        },
+        {
+            "name": "Debug Sequence Depth Estimator (No Undistort)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/image_sequence_depth_estimator.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--base_input_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/images",
+                "--base_output_dir", "/home/hqlab/workspace/dataset/parkinglot/data/20000/video_depth_no_undistort",
+                "--encoder", "vitl",
+                "--input_size", "518",
+                "--max_frames_per_camera", "5",
+                "--save_npz",
+                "--no_undistort_depth",
+                "--model_checkpoint", "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything/checkpoints/video_depth_anything_vitl.pth"
+            ],
+            "env": {
+                "PYTHONPATH": "/home/hqlab/workspace/depth_estimation/Video-Depth-Anything:${env:PYTHONPATH}"
+            },
+            "python": "/home/hqlab/anaconda3/envs/depthanything-vedio/bin/python"
+        },
+        {
+            "name": "Test Undistort Function",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_undistort.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/home/hqlab/anaconda3/envs/depthanything-vedio/bin/python"
+        }
+    ]
+}

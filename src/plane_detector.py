@@ -6,7 +6,7 @@ import cv2
 from pathlib import Path
 import argparse
 from scipy import ndimage
-from utils import *
+from util import *
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
@@ -17,6 +17,7 @@ class PlaneDetector:
     
     # 语义标签定义
     SEMANTIC_LABELS = {
+        # 'process': range(31),
         # 需要处理的对象
         'process': [
             0,   # WALL
@@ -24,13 +25,13 @@ class PlaneDetector:
             42,  # COLUMN
             14,  # DOOR
             43,  # SIGNBOARD
-            5,   # CEILING
         ],
         # 不需要处理的对象
         'ignore': [
             20,  # CAR
             150, # EGO_CAR
             82,  # LIGHT
+            5,   # CEILING
         ]
     }
     
@@ -48,11 +49,10 @@ class PlaneDetector:
         self.min_region_size = args.min_region_size
         self.coarse_curvature_threshold = args.coarse_curvature_threshold
         self.fine_curvature_threshold = args.fine_curvature_threshold
-        self.angle_threshold = args.angle_threshold
-        
+        self.angle_threshold = args.angle_threshold        
         # 设置输入输出路径
         self.depth_dir = self.base_dir / args.input_subdir / "depths"
-        self.normal_dir = self.base_dir / args.input_subdir / "normals" 
+        self.normal_dir = self.base_dir / args.input_subdir / "diffuse_normal" 
         self.mask_dir = self.base_dir / args.input_subdir / "masks"
         self.output_dir = self.base_dir / args.output_subdir
         
@@ -186,6 +186,8 @@ class PlaneDetector:
         h, w = normals.shape[:2]
         visited = ~valid_mask
         
+        normals = normals / (np.linalg.norm(normals, axis=2, keepdims=True) + 1e-6)
+        
         # 计算深度图的二阶导数（供第二阶段使用）
         depth_curvature = self._compute_depth_second_derivative(depth)
         
@@ -216,7 +218,7 @@ class PlaneDetector:
         current_label = 0
         if not self.use_semantic:
             coarse_curvature_threshold = fine_curvature_threshold
-        
+
         points = [(y, x) for y in range(h) for x in range(w) if not visited[y, x]]
         for y, x in points:
             if visited[y, x]:
@@ -311,6 +313,7 @@ class PlaneDetector:
         Returns:
             (refined_segments, plane_info): 优化后的分割结果和平面信息
         """
+        self.use_semantic = True
         # 1. 过滤无效区域
         if self.use_semantic:
             valid_mask = self._filter_invalid_regions(segmentation, depth)
@@ -352,13 +355,13 @@ class PlaneDetector:
 def main():
     parser = argparse.ArgumentParser(description='Detect planes from images')
     parser.add_argument('--base_dir', type=str, 
-                        default="/home/hqlab/workspace/dataset/carla_data/dumper/",
+                        default="/home/hqlab/workspace/dataset/parkinglot/data",
                         help='Base directory')
     parser.add_argument('--input_subdir', type=str, 
-                        default="2024_12_29_13_59_40",
+                        default="20000",
                         help='Input subdirectory')
     parser.add_argument('--output_subdir', type=str, 
-                        default="2024_12_29_13_59_40/planes",
+                        default="20000/planes",
                         help='Output subdirectory')
     parser.add_argument('--use_semantic', action='store_true',
                         help='Use semantic segmentation')
@@ -368,7 +371,7 @@ def main():
                         help='Minimum region size for plane detection')
     parser.add_argument('--coarse_curvature_threshold', type=float, default=0,
                         help='Coarse curvature threshold for plane detection')
-    parser.add_argument('--fine_curvature_threshold', type=float, default=0.1,
+    parser.add_argument('--fine_curvature_threshold', type=float, default=0,
                         help='Fine curvature threshold for plane detection')
     parser.add_argument('--angle_threshold', type=float, default=5,
                         help='Angle threshold for plane detection')
@@ -376,6 +379,9 @@ def main():
     
     detector = PlaneDetector(args)
     detector.process_dataset(use_multiprocess=args.use_multiprocess)
+    # detector.process_single_image(
+    #     Path("/home/hqlab/workspace/dataset/parkinglot/data/20000/normals/camera_FRONT/000095.png")
+    # )
 
 if __name__ == "__main__":
     main()

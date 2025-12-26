@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import json
 
 kernel_Gx = np.array([[0, 0, 0],
                       [-1, 0, 1],
@@ -182,3 +183,180 @@ def MRF_optim(depth, n_est, lap_conf='DLF-alpha'):
     n_z = Nz_t_stack[best_loc_map.reshape(-1), np.arange(h * w)].reshape(h, w)
     n_est = cv2.merge((n_x, n_y, n_z))
     return n_est
+
+def depth_to_normal(depth, intrinsic):
+    h, w = depth.shape
+    u_map = np.ones((h, 1)) * np.arange(1, w + 1) - intrinsic[0, 2]  # u-u0
+    v_map = np.arange(1, h + 1).reshape(h, 1) * np.ones((1, w)) - intrinsic[1, 2]  # v-v0
+    
+    Gu, Gv = get_filter(depth)
+    est_nx = Gu * intrinsic[0, 0]
+    est_ny = Gv * intrinsic[1, 1]
+    est_nz = -(depth + v_map * Gv + u_map * Gu)
+    est_nx = est_nx.astype(np.float32)
+    est_ny = est_ny.astype(np.float32)
+    est_nz = est_nz.astype(np.float32)
+    
+    est_normal = cv2.merge((est_nx, est_ny, est_nz))
+    
+    est_normal = vector_normalization(est_normal)
+    
+    # est_normal = MRF_optim(depth, est_normal)
+    return ((est_normal + 1) * 0.5 * 255).astype(np.uint8)
+
+def inv_depth_to_normal(inv_depth, intrinsic, smooth_ksize: int = 0):
+    """
+    从无尺度的单目逆深度 ρ=1/Z 直接计算法向量（尺度不敏感）。
+
+    公式（与 depth_to_normal 等价但避免 1/ρ 数值不稳）：
+      n ∝ [ fx * ∂ρ/∂u,  fy * ∂ρ/∂v,  ρ - (u-cx)∂ρ/∂u - (v-cy)∂ρ/∂v ]
+
+    Args:
+        inv_depth (np.ndarray HxW): 单目逆深度（可任意尺度）。
+        intrinsic (np.ndarray 3x3): 相机内参。
+        smooth_ksize (int): 可选的高斯平滑核（奇数，>0 时启用），降低噪声。
+
+    Returns:
+        np.ndarray HxWx3 uint8: 可视化法向量。
+    """
+    inv_depth = inv_depth.astype(np.float32)
+    # 可选平滑以抑制高频噪声（地下车库低纹理区域常见）
+    if smooth_ksize and smooth_ksize >= 3 and smooth_ksize % 2 == 1:
+        inv_depth = cv2.GaussianBlur(inv_depth, (smooth_ksize, smooth_ksize), 0)
+
+    h, w = inv_depth.shape
+    u_map = np.ones((h, 1), dtype=np.float32) * np.arange(1, w + 1, dtype=np.float32) - intrinsic[0, 2]
+    v_map = np.arange(1, h + 1, dtype=np.float32).reshape(h, 1) * np.ones((1, w), dtype=np.float32) - intrinsic[1, 2]
+
+    # 对 ρ 求偏导
+    Gu, Gv = get_filter(inv_depth)
+
+    est_nx = intrinsic[0, 0] * Gu
+    est_ny = intrinsic[1, 1] * Gv
+    est_nz = inv_depth - (u_map * Gu + v_map * Gv)
+
+    est_nx = est_nx.astype(np.float32)
+    est_ny = est_ny.astype(np.float32)
+    est_nz = est_nz.astype(np.float32)
+
+    # 为与 depth_to_normal 的方向一致，需要整体取反（两者相差一个负的标量因子）
+    est_normal = -cv2.merge((est_nx, est_ny, est_nz))
+    est_normal = vector_normalization(est_normal)
+    return ((est_normal + 1) * 0.5 * 255).astype(np.uint8)
+
+def inv_depth_to_pseudo_depth(inv_depth: np.ndarray,
+                              method: str = 'convex',
+                              epsilon: float = None,
+                              max_depth: float = None,
+                              a: float = 0.1) -> np.ndarray:
+    """
+    将逆深度 ρ 映射为数值稳定、可保存/可视化的“伪深度”。
+
+    注意：单目逆深度无绝对尺度，任何映射只保证单调性与数值稳定；
+         若后续需要“度量深度”，需额外做尺度对齐（例如用已知物理尺寸、LiDAR 对齐等）。
+
+    方法：
+      - method='reciprocal': depth = 1 / max(ρ, epsilon)。避免 ρ→0 时爆炸，epsilon 可用分位数自适应。
+      - method='convex'    : depth = 1 / (a + (1-a)*ρ)。单调“压缩”大深度，最大深度≈1/a；你提到的 1/(0.1+0.9*1/z)
+                             在 ρ=1/z 的情形下等价于此（a=0.1）。
+
+    参数：
+      - inv_depth: ρ（HxW, float32）
+      - epsilon: reciprocal 模式下用来下限裁剪 ρ 的阈值；None 时取 max(1e-6, P1(ρ))
+      - max_depth: 额外限制最大深度（可选）；当提供时，会将 depth = min(depth, max_depth)
+      - a: convex 模式的常数 a∈(0,1)，a 越大，最大深度 1/a 越小、压缩越强。
+
+    返回：depth（HxW, float32）
+    """
+    ρ = inv_depth.astype(np.float32)
+    if method == 'reciprocal':
+        if epsilon is None:
+            # 用 1% 分位数抑制极小值，再与 1e-6 取较大者
+            eps_auto = float(np.percentile(ρ[~np.isnan(ρ)], 1)) if np.isfinite(ρ).any() else 1e-6
+            epsilon = max(1e-6, eps_auto)
+        depth = 1.0 / np.maximum(ρ, epsilon)
+    elif method == 'convex':
+        a = float(np.clip(a, 1e-6, 0.999999))
+        depth = 1.0 / (a + (1.0 - a) * ρ)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    if max_depth is not None and np.isfinite(max_depth):
+        depth = np.minimum(depth, float(max_depth))
+    return depth.astype(np.float32)
+
+def inv_depth_to_normal_and_confidence(inv_depth: np.ndarray,
+                                       intrinsic: np.ndarray,
+                                       smooth_ksize: int = 0):
+    """
+    从逆深度计算：
+      - 单位法向 n_unit（HxWx3, float32，模长=1）
+      - 置信度 conf（HxW, float32 ∈[0,1]），基于梯度强度的稳健分位归一化
+
+    conf 反映局部几何信号强度（梯度越强、越可靠），不会随单位化丢失。
+    """
+    inv_depth = inv_depth.astype(np.float32)
+    if smooth_ksize and smooth_ksize >= 3 and smooth_ksize % 2 == 1:
+        inv_depth = cv2.GaussianBlur(inv_depth, (smooth_ksize, smooth_ksize), 0)
+
+    h, w = inv_depth.shape
+    u_map = np.ones((h, 1), dtype=np.float32) * np.arange(1, w + 1, dtype=np.float32) - intrinsic[0, 2]
+    v_map = np.arange(1, h + 1, dtype=np.float32).reshape(h, 1) * np.ones((1, w), dtype=np.float32) - intrinsic[1, 2]
+
+    Gu, Gv = get_filter(inv_depth)
+    nx = intrinsic[0, 0] * Gu
+    ny = intrinsic[1, 1] * Gv
+    nz = inv_depth - (u_map * Gu + v_map * Gv)
+
+    # 符号对齐到与 depth_to_normal 一致
+    nx, ny, nz = -nx, -ny, -nz
+
+    vec = cv2.merge((nx.astype(np.float32), ny.astype(np.float32), nz.astype(np.float32)))
+    mag = np.linalg.norm(vec, axis=2)
+    n_unit = vec / (mag[..., None] + 1e-8)
+
+    # 以梯度强度生成置信度，并用稳健分位归一化到 [0,1]
+    g = np.sqrt((intrinsic[0, 0] * Gu) ** 2 + (intrinsic[1, 1] * Gv) ** 2).astype(np.float32)
+    valid = np.isfinite(g)
+    if valid.any():
+        p5 = float(np.percentile(g[valid], 5))
+        p95 = float(np.percentile(g[valid], 95))
+    else:
+        p5, p95 = 0.0, 1.0
+    conf = (g - p5) / (max(1e-6, p95 - p5))
+    conf = np.clip(conf, 0.0, 1.0)
+
+    # 低值/无效逆深度区域置信度降为0
+    conf[~np.isfinite(inv_depth) | (inv_depth <= 0)] = 0.0
+    return n_unit.astype(np.float32), conf.astype(np.float32)
+
+def normal_to_uint8(n_unit: np.ndarray) -> np.ndarray:
+    """将单位法向[-1,1]映射到可视化的uint8 RGB。"""
+    return ((np.clip(n_unit, -1.0, 1.0) + 1.0) * 0.5 * 255.0).astype(np.uint8)
+
+def load_camera_params(json_path) :
+        """加载相机参数（内参和外参）
+        
+        Args:
+            json_path: 相机参数json
+            
+        Returns:
+            tuple[np.ndarray, np.ndarray]: 
+                - extrinsic: [4, 4] 相机外参矩阵
+                - intrinsic: [3, 3] 相机内参矩阵
+        """
+        
+        # 读取JSON文件
+        with open(json_path, 'r') as f:
+            params = json.load(f)
+        
+        # 解析外参矩阵
+        extrinsic = np.array(params["extrinsic"]).reshape(4, 4)
+        
+        # 解析内参矩阵
+        intrinsic = np.array(params["intrinsic"]).reshape(3, 3)
+        
+        # 解析畸变系数
+        distortion = np.array(params["distortion"])
+        
+        return extrinsic, intrinsic, distortion

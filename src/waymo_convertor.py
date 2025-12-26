@@ -97,7 +97,7 @@ class WaymoConverter:
         extrinsic, intrinsic, distortion = self.load_camera_params(camera_name)
 
         # 计算相机到世界的变换
-        c2w = self.lidar_pose @ self.pandar_to_waymo @ extrinsic
+        c2w = self.lidar_pose @ self.pandar_to_waymo @ inv(extrinsic)
         
         # 加载相机时间戳并转换为NumPy数组
         with open(self.data_dir / "time" / f"{camera_name}.json", 'r') as f:
@@ -106,7 +106,7 @@ class WaymoConverter:
         
         return {
             "hw": np.tile(np.array([img.shape[0],img.shape[1]]), (self.frame_num, 1)),
-            "c2v": np.tile(self.pandar_to_waymo @ extrinsic, (self.frame_num, 1, 1)).astype(np.float32),
+            "c2v": np.tile(self.pandar_to_waymo @ inv(extrinsic), (self.frame_num, 1, 1)).astype(np.float32),
             "sensor_v2w": self.lidar_pose,
             "c2w": c2w.astype(np.float32),
             "global_frame_ind": np.arange(self.frame_num),
@@ -145,7 +145,7 @@ class WaymoConverter:
     def convert(self):
         """转换数据到Waymo格式"""
         # 加载位姿和标定数据
-        self.lidar_pose = self.load_poses(self.data_dir / "lidar_poses.txt")
+        self.lidar_pose = self.load_poses(self.data_dir / "poses_adjusted.txt")
         self.frame_num = self.lidar_pose.shape[0]
         
         # 构建数据字典
@@ -192,7 +192,7 @@ def main():
                     default="/home/hqlab/workspace/dataset/parkinglot",
                     help='Base directory')
     parser.add_argument('--subdir', type=str, 
-                    default="data/10_26",
+                    default="data/test1",
                     help='Subdirectory containing data')
     args = parser.parse_args()
     
